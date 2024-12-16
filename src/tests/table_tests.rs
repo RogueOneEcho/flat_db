@@ -1,15 +1,14 @@
 use crate::tests::example_item::{example_items, ExampleItem};
 use crate::tests::helpers::{create_temp_dir, PKG_NAME};
 use crate::{Hash, Table};
-use rogue_logging::Error;
-use rogue_logging::Logger;
+use rogue_logging::{Error, LoggerBuilder};
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 
 #[tokio::test]
 async fn table_end_to_end() -> Result<(), Error> {
     // Arrange
-    Logger::force_init(PKG_NAME.to_owned());
+    let _ = LoggerBuilder::new().create();
     let table = Table::<20, 1, ExampleItem> {
         directory: create_temp_dir(PKG_NAME),
         phantom: PhantomData,
