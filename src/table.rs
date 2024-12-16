@@ -3,7 +3,8 @@ use colored::Colorize;
 use futures::future;
 use log::trace;
 use rogue_logging::Error;
-use serde::{Deserialize, Serialize};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
@@ -62,7 +63,7 @@ impl<const K: usize, const C: usize, T> Default for Table<K, C, T> {
 
 impl<const K: usize, const C: usize, T> Table<K, C, T>
 where
-    T: Clone + for<'de> Deserialize<'de>,
+    T: Clone + DeserializeOwned,
 {
     /// Get an item by hash.
     ///
@@ -114,7 +115,7 @@ where
 #[allow(dead_code)]
 impl<const K: usize, const C: usize, T> Table<K, C, T>
 where
-    T: Clone + Send + Serialize + for<'de> Deserialize<'de> + 'static,
+    T: Clone + Send + Serialize + DeserializeOwned + 'static,
 {
     /// Add or replace an item.
     pub async fn set(&self, hash: Hash<K>, item: T) -> Result<(), Error> {
@@ -190,7 +191,7 @@ fn read_chunk<const K: usize, const C: usize, T>(
     path: &PathBuf,
 ) -> Result<BTreeMap<Hash<K>, T>, Error>
 where
-    T: for<'de> Deserialize<'de>,
+    T: DeserializeOwned,
 {
     if !path.exists() || !path.is_file() {
         return Err(Error {
@@ -252,7 +253,7 @@ async fn update_chunk<const K: usize, const C: usize, T>(
     replace: bool,
 ) -> Result<usize, Error>
 where
-    T: for<'de> Deserialize<'de> + Serialize,
+    T: DeserializeOwned + Serialize,
 {
     let mut added = 0;
     let lock = acquire_lock(&chunk_path).await?;
