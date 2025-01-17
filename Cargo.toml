@@ -16,21 +16,20 @@ include = [
 ]
 
 [dependencies]
-colored = "^2.1"
-log = { version = "^0.4", features = ["std"] }
-rogue_logging = "^0.3"
-serde = { version = "^1.0", features = ["derive"] }
+colored = "3.0.0"
+log = { version = "0.4.25", features = ["std"] }
+rogue_logging = "0.3.0"
+serde = { version = "1.0.217", features = ["derive"] }
 serde_yaml = "0.9.34"
-tokio = { version = "^1", features = ["full"] }
+tokio = { version = "1.43.0", features = ["full"] }
 futures = "0.3.31"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
-#restriction = { level = "warn", priority = -2 }
-
 absolute_paths = "warn"
 arithmetic_side_effects = "allow"
 as_conversions = "warn"
+await_holding_lock = "allow"
 cast_possible_truncation = "warn"
 clone_on_ref_ptr = "allow"
 enum_glob_use = "allow"
@@ -68,6 +67,7 @@ std_instead_of_alloc = "allow"
 std_instead_of_core = "allow"
 str_to_string = "warn"
 string_add = "allow"
+result_large_err = "allow"
 tests_outside_test_module = "allow"
 unneeded_wildcard_pattern = "warn"
 unseparated_literal_suffix = "warn"
@@ -76,8 +76,3 @@ unwrap_used = "warn"
 wildcard_enum_match_arm = "allow"
 wildcard_imports = "allow"
 wrong_self_convention = "allow"
-# TODO COULD re-consider the following allows:
-result_large_err = "allow"
-
-# TODO SHOULD investigate solution to await_holding_lock
-await_holding_lock = "allow"
