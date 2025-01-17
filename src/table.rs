@@ -164,6 +164,21 @@ where
         }
         Ok(added)
     }
+
+    /// Remove an item.
+    pub async fn remove(&self, hash: Hash<K>) -> Result<(), Error> {
+        let chunk_path = self.get_chunk_path(get_chunk_hash(hash));
+        let lock = acquire_lock(&chunk_path).await?;
+        let mut chunk = if chunk_path.exists() {
+            read_chunk::<K, C, T>(&chunk_path)?
+        } else {
+            BTreeMap::new()
+        };
+        chunk.remove(&hash);
+        write_chunk::<K, C, T>(chunk_path, chunk)?;
+        release_lock(lock).await?;
+        Ok(())
+    }
 }
 
 /// Get the chunk hash from [`hash`]

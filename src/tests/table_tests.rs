@@ -45,5 +45,13 @@ async fn table_end_to_end() -> Result<(), Error> {
     let actual_count = items.len();
     assert_eq!(expected_count + 1, actual_count);
 
+    // Act
+    table.remove(hash).await?;
+
+    // Assert
+    let items: BTreeMap<Hash<20>, ExampleItem> = table.get_all().await?;
+    let actual_count = items.len();
+    assert_eq!(expected_count, actual_count);
+
     Ok(())
 }
