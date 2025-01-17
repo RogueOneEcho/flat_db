@@ -175,7 +175,9 @@ where
             BTreeMap::new()
         };
         let item = chunk.remove(&hash);
-        write_chunk::<K, C, T>(chunk_path, chunk)?;
+        if item.is_some() {
+            write_chunk::<K, C, T>(chunk_path, chunk)?;
+        }
         release_lock(lock).await?;
         Ok(item)
     }
