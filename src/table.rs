@@ -20,21 +20,17 @@ const LOCK_ACQUIRE_SLEEP_MILLIS: u64 = 50;
 const LOCK_ACQUIRE_TIMEOUT: u64 = 2;
 const LOCK_FILE_EXTENSION: &str = "lock";
 
-/// A table of items of type [`T`] stored by key of type [`Hash<K>`].
+/// Key-value table with chunked file storage.
 ///
-/// Get and set operations are performed directly on the file system.
-///
-/// Chunks are determind by truncating the key to a [`Hash<C>`]
-/// All items in a chunk are serialized and written together to a [`CHUNK_FILE_EXTENSION`] file.
-///
-/// Chunking achieves a balance between minimizing the number of file operations and
-/// the performance cost of serializing large numbers of items to a flat file format that can be
-/// manually edited and version controlled.
-///
-/// Write operations are protected by [`LOCK_FILE_EXTENSION`] files.
+/// - Items of type `T` are stored by key of type [`Hash<K>`]
+/// - Get and set operations are performed directly on the file system
+/// - Chunks are determined by truncating the key to a [`Hash<C>`]
+/// - All items in a chunk are serialized to a single YAML file
+/// - Write operations are protected by lock files
 pub struct Table<const K: usize, const C: usize, T> {
-    /// Directory for storing the data
+    /// Directory for storing the data.
     pub(crate) directory: PathBuf,
+    /// Marker for the item type.
     pub phantom: PhantomData<T>,
 }
 

@@ -5,7 +5,9 @@ use std::fmt::{Debug, Display, Formatter};
 
 const HEXADECIMAL_RADIX: u32 = 16;
 
-/// Byte array hash
+/// Fixed-size byte array hash.
+///
+/// Serializes to and from hexadecimal strings.
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Hash<const N: usize> {
     bytes: [u8; N],
@@ -18,13 +20,13 @@ impl<const N: usize> Hash<N> {
         Self { bytes }
     }
 
-    /// Creates a hash from a hexadecimal string.
+    /// Create a [`Hash`] from a hexadecimal string.
     pub fn from_string(hex: &str) -> Result<Self, Error> {
         let bytes = to_bytes(hex)?;
         Ok(Hash::new(bytes))
     }
 
-    /// Get the hash as a hexadecimal string.
+    /// Hexadecimal string representation.
     #[must_use]
     pub fn to_hex(&self) -> String {
         self.bytes.iter().fold(String::new(), |mut acc, &b| {
@@ -33,15 +35,15 @@ impl<const N: usize> Hash<N> {
         })
     }
 
-    /// Get the byte array
+    /// Underlying byte array.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8; N] {
         &self.bytes
     }
 
-    /// Truncate the hash
+    /// Truncated hash with `M` bytes.
     ///
-    /// Returns `None` if `M` > `N`
+    /// Returns `None` if `M > N`.
     #[must_use]
     pub fn truncate<const M: usize>(&self) -> Option<Hash<M>> {
         let bytes: [u8; M] = self.bytes[..M].try_into().ok()?;

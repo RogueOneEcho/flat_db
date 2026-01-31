@@ -6,28 +6,20 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use tokio::fs::{copy, create_dir_all, read_dir};
 
-/// A table of items of type [`T`] stored by key of type [`Hash<K>`].
+/// File storage table with chunked directories.
 ///
-/// Get and set operations are performed directly on the file system.
-///
-/// Chunks are determind by truncating the key to a [`Hash<C>`]
-/// All items in a chunk are serialized and written together to a [`CHUNK_FILE_EXTENSION`] file.
-///
-/// Chunking achieves a balance between minimizing the number of file operations and
-/// the performance cost of serializing large numbers of items to a flat file format that can be
-/// manually edited and version controlled.
-///
-/// Write operations are protected by [`LOCK_FILE_EXTENSION`] files.
+/// - Files are stored by key of type [`Hash<K>`]
+/// - Chunk directories are determined by truncating the key to a [`Hash<C>`]
+/// - Files are copied into the storage directory
 pub struct FileTable<const K: usize, const C: usize> {
-    /// Directory for storing the files
+    /// Directory for storing the files.
     pub(crate) directory: PathBuf,
-
-    /// The file extension
+    /// File extension for stored files.
     pub(crate) extension: String,
 }
 
 impl<const K: usize, const C: usize> FileTable<K, C> {
-    /// Create a new [`Table`]
+    /// Create a new [`FileTable`].
     #[must_use]
     pub fn new(directory: PathBuf, extension: String) -> Self {
         Self {
@@ -119,7 +111,7 @@ impl<const K: usize, const C: usize> FileTable<K, C> {
 
 #[allow(dead_code)]
 impl<const K: usize, const C: usize> FileTable<K, C> {
-    /// Add or replace a file path.
+    /// Copy a file into storage.
     pub async fn set(&self, hash: Hash<K>, path: PathBuf) -> Result<(), Error> {
         let stored_path = self.get_path(hash);
         let stored_dir = stored_path
@@ -142,11 +134,9 @@ impl<const K: usize, const C: usize> FileTable<K, C> {
         Ok(())
     }
 
-    /// Add many file paths.
+    /// Copy multiple files into storage.
     ///
     /// Existing files are replaced.
-    ///
-    /// Returns the number of items added
     pub async fn set_many(&self, items: BTreeMap<Hash<K>, PathBuf>) -> Result<(), Error> {
         let tasks: Vec<_> = items
             .into_iter()
