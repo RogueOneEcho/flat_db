@@ -1,7 +1,9 @@
-use rogue_logging::Error;
+use miette::Diagnostic;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter, Write};
+use std::num::ParseIntError;
+use thiserror::Error;
 
 const HEXADECIMAL_RADIX: u32 = 16;
 
@@ -20,8 +22,8 @@ impl<const N: usize> Hash<N> {
         Self { bytes }
     }
 
-    /// Create a [`Hash`] from a hexadecimal string.
-    pub fn from_string(hex: &str) -> Result<Self, Error> {
+    /// Create a `Hash<N>` from a hexadecimal string.
+    pub fn from_string(hex: &str) -> Result<Self, HashError> {
         let bytes = to_bytes(hex)?;
         Ok(Hash::new(bytes))
     }
@@ -92,29 +94,33 @@ impl<'de, const N: usize> Deserialize<'de> for Hash<N> {
 /// Convert a hexadecimal string to a 20-byte array.
 #[allow(clippy::needless_range_loop)]
 #[allow(clippy::indexing_slicing)]
-fn to_bytes<const N: usize>(hex: &str) -> Result<[u8; N], Error> {
+fn to_bytes<const N: usize>(hex: &str) -> Result<[u8; N], HashError> {
     let length = hex.len();
     if length != N * 2 {
-        return Err(Error {
-            action: "convert hash".to_owned(),
-            message: format!("Length was not {}: {length}", N * 2),
-            ..Error::default()
+        return Err(HashError::InvalidLength {
+            expected: N * 2,
+            actual: length,
         });
     }
     let mut bytes = [0_u8; N];
     for i in 0..N {
         let start = i * 2;
         let byte_str = &hex[start..start + 2];
-        bytes[i] = to_byte(byte_str)?;
+        bytes[i] = to_byte(byte_str).map_err(|_| HashError::InvalidCharacter { position: start })?;
     }
     Ok(bytes)
 }
 
 /// Convert a 2-character hexadecimal string to a byte.
-fn to_byte(hex: &str) -> Result<u8, Error> {
-    u8::from_str_radix(hex, HEXADECIMAL_RADIX).map_err(|_| Error {
-        action: "convert hash".to_owned(),
-        message: format!("Invalid hex character: {hex}"),
-        ..Error::default()
-    })
+fn to_byte(hex: &str) -> Result<u8, ParseIntError> {
+    u8::from_str_radix(hex, HEXADECIMAL_RADIX)
+}
+
+/// Errors when parsing a `Hash` from a hexadecimal string.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Error, Diagnostic)]
+pub enum HashError {
+    #[error("Invalid hex length\nExpected: {expected}\nActual: {actual}")]
+    InvalidLength { expected: usize, actual: usize },
+    #[error("Invalid hex character at position {position}")]
+    InvalidCharacter { position: usize },
 }

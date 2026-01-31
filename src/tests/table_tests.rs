@@ -1,17 +1,15 @@
 use crate::tests::example_item::{ExampleItem, example_items};
 use crate::tests::snapshots::TableSnapshot;
 use crate::tests::test_directory::TestDirectory;
-use crate::{Hash, Table};
-use rogue_logging::{Error, LoggerBuilder};
+use crate::{Hash, Table, TableError};
 use std::collections::BTreeMap;
 use std::fs::create_dir_all;
 use std::marker::PhantomData;
 use tokio::runtime::Runtime;
 
 #[tokio::test]
-async fn table_set_many_and_get_all() -> Result<(), Error> {
+async fn table_set_many_and_get_all() -> Result<(), TableError> {
     // Arrange
-    let _ = LoggerBuilder::new().create();
     let (_test_dir, table) = create_table();
     let items = example_items();
 
@@ -26,9 +24,8 @@ async fn table_set_many_and_get_all() -> Result<(), Error> {
 }
 
 #[tokio::test]
-async fn table_set_and_remove() -> Result<(), Error> {
+async fn table_set_and_remove() -> Result<(), TableError> {
     // Arrange
-    let _ = LoggerBuilder::new().create();
     let (_test_dir, table) = create_table();
     let items = example_items();
     let expected_count = items.len();
@@ -54,9 +51,8 @@ async fn table_set_and_remove() -> Result<(), Error> {
 }
 
 #[tokio::test]
-async fn table_get_single_item() -> Result<(), Error> {
+async fn table_get_single_item() -> Result<(), TableError> {
     // Arrange
-    let _ = LoggerBuilder::new().create();
     let (_test_dir, table) = create_table();
     let items = example_items();
     table.set_many(items.clone(), true).await?;
@@ -71,9 +67,8 @@ async fn table_get_single_item() -> Result<(), Error> {
 }
 
 #[tokio::test]
-async fn table_get_missing_item() -> Result<(), Error> {
+async fn table_get_missing_item() -> Result<(), TableError> {
     // Arrange
-    let _ = LoggerBuilder::new().create();
     let (_test_dir, table) = create_table();
     let items = example_items();
     table.set_many(items, true).await?;
@@ -88,9 +83,8 @@ async fn table_get_missing_item() -> Result<(), Error> {
 }
 
 #[tokio::test]
-async fn table_set_many_no_replace() -> Result<(), Error> {
+async fn table_set_many_no_replace() -> Result<(), TableError> {
     // Arrange
-    let _ = LoggerBuilder::new().create();
     let (_test_dir, table) = create_table();
     let items = example_items();
     table.set_many(items.clone(), true).await?;
@@ -116,7 +110,6 @@ async fn table_set_many_no_replace() -> Result<(), Error> {
 #[test]
 fn table_empty_get_all() {
     // Arrange
-    let _ = LoggerBuilder::new().create();
     let (test_dir, table) = create_table();
     create_dir_all(&test_dir.path).expect("should create dir");
 
@@ -130,9 +123,8 @@ fn table_empty_get_all() {
 }
 
 #[tokio::test]
-async fn table_remove_missing_item() -> Result<(), Error> {
+async fn table_remove_missing_item() -> Result<(), TableError> {
     // Arrange
-    let _ = LoggerBuilder::new().create();
     let (_test_dir, table) = create_table();
     let items = example_items();
     table.set_many(items.clone(), true).await?;
