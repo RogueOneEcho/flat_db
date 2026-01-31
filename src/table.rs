@@ -3,15 +3,15 @@ use colored::Colorize;
 use futures::future;
 use log::trace;
 use rogue_logging::Error;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use tokio::fs::{read_dir, remove_file, OpenOptions};
+use tokio::fs::{OpenOptions, read_dir, remove_file};
 use tokio::task;
 use tokio::time::sleep;
 

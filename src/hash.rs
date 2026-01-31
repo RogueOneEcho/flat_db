@@ -1,7 +1,7 @@
 use rogue_logging::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::{Debug, Display, Formatter, Write};
 
 const HEXADECIMAL_RADIX: u32 = 16;
 
@@ -30,7 +30,7 @@ impl<const N: usize> Hash<N> {
     #[must_use]
     pub fn to_hex(&self) -> String {
         self.bytes.iter().fold(String::new(), |mut acc, &b| {
-            acc.push_str(&format!("{b:02x}"));
+            let _ = write!(acc, "{b:02x}");
             acc
         })
     }

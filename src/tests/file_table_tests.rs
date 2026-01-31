@@ -1,5 +1,5 @@
-use crate::tests::example_item::{example_items, ExampleItem};
-use crate::tests::helpers::{create_temp_dir, PKG_NAME};
+use crate::tests::example_item::{ExampleItem, example_items};
+use crate::tests::helpers::{PKG_NAME, create_temp_dir};
 use crate::{FileTable, Hash};
 use rogue_logging::Verbosity::Trace;
 use rogue_logging::{Error, LoggerBuilder};
