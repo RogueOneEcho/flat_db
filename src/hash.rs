@@ -1,4 +1,5 @@
 use miette::Diagnostic;
+use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter, Write};
@@ -86,14 +87,11 @@ impl<'de, const N: usize> Deserialize<'de> for Hash<N> {
         D: Deserializer<'de>,
     {
         let hex_str = String::deserialize(deserializer)?;
-        #[allow(clippy::absolute_paths)]
-        Hash::from_string(&hex_str).map_err(serde::de::Error::custom)
+        Hash::from_string(&hex_str).map_err(DeError::custom)
     }
 }
 
 /// Convert a hexadecimal string to a 20-byte array.
-#[allow(clippy::needless_range_loop)]
-#[allow(clippy::indexing_slicing)]
 fn to_bytes<const N: usize>(hex: &str) -> Result<[u8; N], HashError> {
     let length = hex.len();
     if length != N * 2 {
@@ -103,10 +101,10 @@ fn to_bytes<const N: usize>(hex: &str) -> Result<[u8; N], HashError> {
         });
     }
     let mut bytes = [0_u8; N];
-    for i in 0..N {
+    for (i, byte) in bytes.iter_mut().enumerate() {
         let start = i * 2;
         let byte_str = &hex[start..start + 2];
-        bytes[i] = to_byte(byte_str).map_err(|_| HashError::InvalidCharacter { position: start })?;
+        *byte = to_byte(byte_str).map_err(|_| HashError::InvalidCharacter { position: start })?;
     }
     Ok(bytes)
 }

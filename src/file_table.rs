@@ -107,7 +107,6 @@ impl<const K: usize, const C: usize> FileTable<K, C> {
     }
 }
 
-#[allow(dead_code)]
 impl<const K: usize, const C: usize> FileTable<K, C> {
     /// Copy a file into storage.
     pub async fn set(&self, hash: Hash<K>, path: PathBuf) -> Result<(), FileTableError> {

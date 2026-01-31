@@ -110,7 +110,6 @@ where
     }
 }
 
-#[allow(dead_code)]
 impl<const K: usize, const C: usize, T> Table<K, C, T>
 where
     T: Clone + Send + Serialize + DeserializeOwned + 'static,

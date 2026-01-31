@@ -12,5 +12,4 @@ mod file_table;
 mod hash;
 mod table;
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests;

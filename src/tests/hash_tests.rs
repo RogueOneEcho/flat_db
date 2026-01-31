@@ -35,7 +35,9 @@ fn hash_truncate() {
     let hash = Hash::new(VALID_BYTES);
 
     // Act
-    let truncated = hash.truncate::<4>().unwrap();
+    let truncated = hash
+        .truncate::<4>()
+        .expect("4 < 20 so truncation should succeed");
 
     // Assert
     assert_eq!(truncated.as_bytes(), &[0x0a, 0x1b, 0x2c, 0x3d]);
@@ -55,7 +57,7 @@ fn hash_to_hex() {
 fn hash_from_string() {
     // Arrange
     // Act
-    let hash = Hash::from_string(VALID_HEX).unwrap();
+    let hash = Hash::from_string(VALID_HEX).expect("VALID_HEX is valid");
 
     // Assert
     assert_eq!(hash.as_bytes(), &VALID_BYTES);
