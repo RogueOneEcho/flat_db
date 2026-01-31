@@ -85,9 +85,9 @@ where
         let dir_path = self.directory.clone();
         let mut dir = read_dir(&self.directory)
             .await
-            .map_err(|source| TableError::new(TableOperation::ReadDir, Some(dir_path), source))?;
+            .map_err(|source| TableError::io(TableOperation::ReadDir, Some(dir_path), source))?;
         while let Some(entry) = dir.next_entry().await.map_err(|source| {
-            TableError::new(
+            TableError::io(
                 TableOperation::ReadEntry,
                 Some(self.directory.clone()),
                 source,
@@ -158,13 +158,25 @@ where
                 async move { update_chunk::<K, C, T>(chunk_path, new_chunk, replace).await },
             )
         });
+        let results = future::join_all(futures).await;
         let mut added = 0;
-        for result in future::join_all(futures).await {
-            added += result
-                .map_err(|source| TableError::new(TableOperation::JoinTask, None, source))??;
+        let mut errors = Vec::new();
+        for result in results {
+            match result {
+                Ok(Ok(count)) => added += count,
+                Ok(Err(e)) => errors.push(e),
+                Err(source) => errors.push(TableError::join(source)),
+            }
         }
-        trace!(added, "Set many items complete");
-        Ok(added)
+        if errors.is_empty() {
+            trace!(added, "Set many items complete");
+            Ok(added)
+        } else {
+            let succeeded = chunk_count - errors.len();
+            let failed = errors.len();
+            trace!(succeeded, failed, "Set many items complete");
+            Err(TableError::batch(succeeded, failed, errors))
+        }
     }
 
     /// Remove an item.
@@ -216,9 +228,9 @@ where
     debug!(path = %path.display(), "Reading chunk");
     let bytes = read(path)
         .await
-        .map_err(|source| TableError::new(TableOperation::ReadChunk, Some(path.clone()), source))?;
+        .map_err(|source| TableError::io(TableOperation::ReadChunk, Some(path.clone()), source))?;
     serde_yaml::from_slice(&bytes)
-        .map_err(|source| TableError::new(TableOperation::Deserialize, Some(path.clone()), source))
+        .map_err(|source| TableError::yaml(TableOperation::Deserialize, Some(path.clone()), source))
 }
 
 /// Write a chunk to a file
@@ -230,11 +242,12 @@ where
     T: Serialize,
 {
     debug!(path = %path.display(), "Writing chunk");
-    let yaml = serde_yaml::to_string(&chunk)
-        .map_err(|source| TableError::new(TableOperation::Serialize, Some(path.clone()), source))?;
+    let yaml = serde_yaml::to_string(&chunk).map_err(|source| {
+        TableError::yaml(TableOperation::Serialize, Some(path.clone()), source)
+    })?;
     write(&path, yaml)
         .await
-        .map_err(|source| TableError::new(TableOperation::WriteChunk, Some(path), source))?;
+        .map_err(|source| TableError::io(TableOperation::WriteChunk, Some(path), source))?;
     Ok(())
 }
 
@@ -287,7 +300,7 @@ async fn acquire_lock(path: &Path) -> Result<PathBuf, TableError> {
             return Ok(lock);
         }
         if start.elapsed() > timeout {
-            return Err(TableError::new(
+            return Err(TableError::io(
                 TableOperation::AcquireLock,
                 Some(lock),
                 io::Error::new(
@@ -303,7 +316,7 @@ async fn acquire_lock(path: &Path) -> Result<PathBuf, TableError> {
 
 async fn release_lock(path: PathBuf) -> Result<(), TableError> {
     remove_file(&path).await.map_err(|source| {
-        TableError::new(TableOperation::ReleaseLock, Some(path.clone()), source)
+        TableError::io(TableOperation::ReleaseLock, Some(path.clone()), source)
     })?;
     trace!(path = %path.display(), "Lock released");
     Ok(())
@@ -330,26 +343,64 @@ pub enum TableOperation {
     Deserialize,
     #[error("update multiple chunks")]
     JoinTask,
+    #[error("set items")]
+    SetMany,
 }
 
 /// Errors returned by [`Table`] operations.
-#[derive(Debug, Diagnostic)]
+#[derive(Debug)]
 pub struct TableError {
     pub operation: TableOperation,
     pub path: Option<PathBuf>,
-    pub source: Box<dyn Error + Send + Sync>,
+    source: ErrorSource,
+}
+
+#[derive(Debug)]
+enum ErrorSource {
+    Io(io::Error),
+    Yaml(serde_yaml::Error),
+    Join(task::JoinError),
+    Batch {
+        succeeded: usize,
+        failed: usize,
+        errors: Vec<TableError>,
+    },
 }
 
 impl TableError {
-    fn new(
-        operation: TableOperation,
-        path: Option<PathBuf>,
-        source: impl Error + Send + Sync + 'static,
-    ) -> Self {
+    fn io(operation: TableOperation, path: Option<PathBuf>, source: io::Error) -> Self {
         Self {
             operation,
             path,
-            source: Box::new(source),
+            source: ErrorSource::Io(source),
+        }
+    }
+
+    fn yaml(operation: TableOperation, path: Option<PathBuf>, source: serde_yaml::Error) -> Self {
+        Self {
+            operation,
+            path,
+            source: ErrorSource::Yaml(source),
+        }
+    }
+
+    fn join(source: task::JoinError) -> Self {
+        Self {
+            operation: TableOperation::JoinTask,
+            path: None,
+            source: ErrorSource::Join(source),
+        }
+    }
+
+    fn batch(succeeded: usize, failed: usize, errors: Vec<TableError>) -> Self {
+        Self {
+            operation: TableOperation::SetMany,
+            path: None,
+            source: ErrorSource::Batch {
+                succeeded,
+                failed,
+                errors,
+            },
         }
     }
 }
@@ -360,12 +411,36 @@ impl fmt::Display for TableError {
         if let Some(path) = &self.path {
             write!(f, "\nPath: {}", path.display())?;
         }
+        if let ErrorSource::Batch {
+            succeeded, failed, ..
+        } = &self.source
+        {
+            write!(f, "\n{succeeded} succeeded, {failed} failed")?;
+        }
         Ok(())
     }
 }
 
 impl Error for TableError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(self.source.as_ref())
+        match &self.source {
+            ErrorSource::Io(e) => Some(e),
+            ErrorSource::Yaml(e) => Some(e),
+            ErrorSource::Join(e) => Some(e),
+            ErrorSource::Batch { .. } => None,
+        }
+    }
+}
+
+impl Diagnostic for TableError {
+    fn related<'a>(&'a self) -> Option<Box<dyn Iterator<Item = &'a dyn Diagnostic> + 'a>> {
+        match &self.source {
+            ErrorSource::Batch { errors, .. } => {
+                #[expect(clippy::as_conversions)]
+                let iter = errors.iter().map(|e| e as &dyn Diagnostic);
+                Some(Box::new(iter))
+            }
+            ErrorSource::Io(_) | ErrorSource::Yaml(_) | ErrorSource::Join(_) => None,
+        }
     }
 }
