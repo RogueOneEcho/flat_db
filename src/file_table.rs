@@ -1,6 +1,6 @@
 use crate::Hash;
 use futures::future::join_all;
-use log::trace;
+use tracing::{debug, trace};
 use miette::Diagnostic;
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -47,7 +47,9 @@ impl<const K: usize, const C: usize> FileTable<K, C> {
     #[must_use]
     pub fn get(&self, hash: Hash<K>) -> Option<PathBuf> {
         let path = self.get_path(hash);
-        path.is_file().then_some(path)
+        let found = path.is_file();
+        trace!(hash = %hash, found, "Get file");
+        found.then_some(path)
     }
 
     /// Get all file paths.
@@ -103,6 +105,7 @@ impl<const K: usize, const C: usize> FileTable<K, C> {
                 paths.insert(hash, path);
             }
         }
+        trace!(count = paths.len(), "Get all files");
         Ok(paths)
     }
 }
@@ -115,6 +118,7 @@ impl<const K: usize, const C: usize> FileTable<K, C> {
             .parent()
             .expect("stored path should have a parent");
         if !stored_dir.exists() {
+            trace!(path = %stored_dir.display(), "Creating chunk directory");
             create_dir_all(stored_dir).await.map_err(|source| {
                 FileTableError::new(
                     FileTableOperation::CreateDir,
@@ -123,6 +127,7 @@ impl<const K: usize, const C: usize> FileTable<K, C> {
                 )
             })?;
         }
+        debug!(hash = %hash, from = %path.display(), to = %stored_path.display(), "Copying file");
         copy(&path, &stored_path).await.map_err(|source| {
             FileTableError::new(FileTableOperation::CopyFile, Some(path), source)
         })?;
@@ -133,6 +138,8 @@ impl<const K: usize, const C: usize> FileTable<K, C> {
     ///
     /// Existing files are replaced.
     pub async fn set_many(&self, items: BTreeMap<Hash<K>, PathBuf>) -> Result<(), FileTableError> {
+        let count = items.len();
+        trace!(count, "Set many files");
         let tasks: Vec<_> = items
             .into_iter()
             .map(|(hash, path)| self.set(hash, path))
@@ -140,10 +147,12 @@ impl<const K: usize, const C: usize> FileTable<K, C> {
         let results = join_all(tasks).await;
         let (successes, errors): (Vec<_>, Vec<_>) = results.into_iter().partition(Result::is_ok);
         if errors.is_empty() {
+            trace!(succeeded = count, "Set many files complete");
             Ok(())
         } else {
             let ok_count = successes.len();
             let error_count = errors.len();
+            trace!(succeeded = ok_count, failed = error_count, "Set many files complete");
             let inner_errors: Vec<_> = errors.into_iter().filter_map(Result::err).collect();
             Err(FileTableError::new_batch(
                 ok_count,

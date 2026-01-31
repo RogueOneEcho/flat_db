@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 use std::fs::create_dir_all;
 use std::marker::PhantomData;
 use tokio::runtime::Runtime;
+use tracing_test::traced_test;
 
+#[traced_test]
 #[tokio::test]
 async fn table_set_many_and_get_all() -> Result<(), TableError> {
     // Arrange
@@ -23,6 +25,7 @@ async fn table_set_many_and_get_all() -> Result<(), TableError> {
     Ok(())
 }
 
+#[traced_test]
 #[tokio::test]
 async fn table_set_and_remove() -> Result<(), TableError> {
     // Arrange
@@ -50,6 +53,7 @@ async fn table_set_and_remove() -> Result<(), TableError> {
     Ok(())
 }
 
+#[traced_test]
 #[tokio::test]
 async fn table_get_single_item() -> Result<(), TableError> {
     // Arrange
@@ -66,6 +70,7 @@ async fn table_get_single_item() -> Result<(), TableError> {
     Ok(())
 }
 
+#[traced_test]
 #[tokio::test]
 async fn table_get_missing_item() -> Result<(), TableError> {
     // Arrange
@@ -82,6 +87,7 @@ async fn table_get_missing_item() -> Result<(), TableError> {
     Ok(())
 }
 
+#[traced_test]
 #[tokio::test]
 async fn table_set_many_no_replace() -> Result<(), TableError> {
     // Arrange
@@ -107,6 +113,7 @@ async fn table_set_many_no_replace() -> Result<(), TableError> {
     Ok(())
 }
 
+#[traced_test]
 #[test]
 fn table_empty_get_all() {
     // Arrange
@@ -122,6 +129,7 @@ fn table_empty_get_all() {
     assert!(items.is_empty());
 }
 
+#[traced_test]
 #[tokio::test]
 async fn table_remove_missing_item() -> Result<(), TableError> {
     // Arrange

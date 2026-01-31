@@ -7,7 +7,9 @@ use std::collections::BTreeMap;
 use std::fs::{create_dir_all, write};
 use std::path::PathBuf;
 use tokio::runtime::Runtime;
+use tracing_test::traced_test;
 
+#[traced_test]
 #[tokio::test]
 async fn file_table_set_many_and_get_all() -> Result<(), FileTableError> {
     // Arrange
@@ -26,6 +28,7 @@ async fn file_table_set_many_and_get_all() -> Result<(), FileTableError> {
     Ok(())
 }
 
+#[traced_test]
 #[tokio::test]
 async fn file_table_set_and_get_all() -> Result<(), FileTableError> {
     // Arrange
@@ -54,6 +57,7 @@ async fn file_table_set_and_get_all() -> Result<(), FileTableError> {
     Ok(())
 }
 
+#[traced_test]
 #[tokio::test]
 async fn file_table_get_single_file() -> Result<(), FileTableError> {
     // Arrange
@@ -72,6 +76,7 @@ async fn file_table_get_single_file() -> Result<(), FileTableError> {
     Ok(())
 }
 
+#[traced_test]
 #[tokio::test]
 async fn file_table_get_missing_file() -> Result<(), FileTableError> {
     // Arrange
@@ -91,6 +96,7 @@ async fn file_table_get_missing_file() -> Result<(), FileTableError> {
     Ok(())
 }
 
+#[traced_test]
 #[test]
 fn file_table_empty_get_all() {
     // Arrange

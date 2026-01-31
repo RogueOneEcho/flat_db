@@ -1,7 +1,6 @@
 use crate::Hash;
-use colored::Colorize;
 use futures::future;
-use log::trace;
+use tracing::{debug, trace};
 use miette::Diagnostic;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -71,8 +70,11 @@ where
         let chunk_path = self.get_chunk_path(get_chunk_hash(hash));
         if chunk_path.exists() {
             let chunk = read_chunk::<K, C, T>(&chunk_path)?;
-            Ok(chunk.get(&hash).cloned())
+            let item = chunk.get(&hash).cloned();
+            trace!(hash = %hash, found = item.is_some(), "Get item");
+            Ok(item)
         } else {
+            trace!(hash = %hash, found = false, "Get item");
             Ok(None)
         }
     }
@@ -106,6 +108,7 @@ where
             let chunk = read_chunk::<K, C, T>(&path)?;
             items.extend(chunk);
         }
+        trace!(count = items.len(), "Get all items");
         Ok(items)
     }
 }
@@ -116,6 +119,7 @@ where
 {
     /// Add or replace an item.
     pub async fn set(&self, hash: Hash<K>, item: T) -> Result<(), TableError> {
+        trace!(hash = %hash, "Set item");
         let chunk_path = self.get_chunk_path(get_chunk_hash(hash));
         let lock = acquire_lock(&chunk_path).await?;
         let mut chunk = if chunk_path.exists() {
@@ -141,7 +145,10 @@ where
         items: BTreeMap<Hash<K>, T>,
         replace: bool,
     ) -> Result<usize, TableError> {
+        let item_count = items.len();
         let chunks = group_by_chunk(items);
+        let chunk_count = chunks.len();
+        trace!(items = item_count, chunks = chunk_count, replace, "Set many items");
         let futures = chunks.into_iter().map(|(chunk_hash, new_chunk)| {
             let chunk_path = self.get_chunk_path(chunk_hash);
             task::spawn(
@@ -153,6 +160,7 @@ where
             added += result
                 .map_err(|source| TableError::new(TableOperation::JoinTask, None, source))??;
         }
+        trace!(added, "Set many items complete");
         Ok(added)
     }
 
@@ -170,6 +178,7 @@ where
             write_chunk::<K, C, T>(chunk_path, chunk)?;
         }
         release_lock(lock).await?;
+        trace!(hash = %hash, found = item.is_some(), "Remove item");
         Ok(item)
     }
 }
@@ -208,7 +217,7 @@ where
             io::Error::new(io::ErrorKind::NotFound, "Chunk file does not exist"),
         ));
     }
-    trace!("{} chunk file: {}", "Reading".bold(), path.display());
+    debug!(path = %path.display(), "Reading chunk");
     let file = File::open(path)
         .map_err(|source| TableError::new(TableOperation::OpenChunk, Some(path.clone()), source))?;
     let reader = BufReader::new(file);
@@ -224,7 +233,7 @@ fn write_chunk<const K: usize, const C: usize, T>(
 where
     T: Serialize,
 {
-    trace!("{} chunk file: {}", "Writing".bold(), path.display());
+    debug!(path = %path.display(), "Writing chunk");
     let file = File::create(&path).map_err(|source| {
         TableError::new(TableOperation::CreateChunk, Some(path.clone()), source)
     })?;
@@ -282,6 +291,7 @@ async fn acquire_lock(path: &Path) -> Result<PathBuf, TableError> {
             .await
             .is_ok()
         {
+            trace!(path = %lock.display(), "Lock acquired");
             return Ok(lock);
         }
         if start.elapsed() > timeout {
@@ -294,6 +304,7 @@ async fn acquire_lock(path: &Path) -> Result<PathBuf, TableError> {
                 ),
             ));
         }
+        trace!(path = %lock.display(), "Lock busy, waiting");
         sleep(Duration::from_millis(LOCK_ACQUIRE_SLEEP_MILLIS)).await;
     }
 }
@@ -301,7 +312,9 @@ async fn acquire_lock(path: &Path) -> Result<PathBuf, TableError> {
 async fn release_lock(path: PathBuf) -> Result<(), TableError> {
     remove_file(&path)
         .await
-        .map_err(|source| TableError::new(TableOperation::ReleaseLock, Some(path), source))
+        .map_err(|source| TableError::new(TableOperation::ReleaseLock, Some(path.clone()), source))?;
+    trace!(path = %path.display(), "Lock released");
+    Ok(())
 }
 
 /// Operation being performed when a [`TableError`] occurred.
