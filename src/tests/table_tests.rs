@@ -63,7 +63,7 @@ async fn table_get_single_item() -> Result<(), TableError> {
     let (hash, expected) = items.into_iter().next().expect("should have at least one");
 
     // Act
-    let result = table.get(hash)?;
+    let result = table.get(hash).await?;
 
     // Assert
     assert_eq!(result, Some(expected));
@@ -80,7 +80,7 @@ async fn table_get_missing_item() -> Result<(), TableError> {
     let (missing_hash, _) = create_single_item();
 
     // Act
-    let result = table.get(missing_hash)?;
+    let result = table.get(missing_hash).await?;
 
     // Assert
     assert_eq!(result, None);
@@ -108,7 +108,7 @@ async fn table_set_many_no_replace() -> Result<(), TableError> {
 
     // Assert
     assert_eq!(added, 0);
-    let result = table.get(hash)?;
+    let result = table.get(hash).await?;
     assert_eq!(result, Some(original));
     Ok(())
 }

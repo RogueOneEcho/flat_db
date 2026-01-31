@@ -1,6 +1,5 @@
 use crate::Hash;
 use futures::future::join_all;
-use tracing::{debug, trace};
 use miette::Diagnostic;
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -8,6 +7,7 @@ use std::path::PathBuf;
 use std::{fmt, io};
 use thiserror::Error as ThisError;
 use tokio::fs::{copy, create_dir_all, read_dir};
+use tracing::{debug, trace};
 
 /// File storage table with chunked directories.
 ///
@@ -152,7 +152,11 @@ impl<const K: usize, const C: usize> FileTable<K, C> {
         } else {
             let ok_count = successes.len();
             let error_count = errors.len();
-            trace!(succeeded = ok_count, failed = error_count, "Set many files complete");
+            trace!(
+                succeeded = ok_count,
+                failed = error_count,
+                "Set many files complete"
+            );
             let inner_errors: Vec<_> = errors.into_iter().filter_map(Result::err).collect();
             Err(FileTableError::new_batch(
                 ok_count,

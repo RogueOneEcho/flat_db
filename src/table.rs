@@ -1,21 +1,19 @@
 use crate::Hash;
 use futures::future;
-use tracing::{debug, trace};
 use miette::Diagnostic;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
 use std::error::Error;
-use std::fs::File;
-use std::io::{BufReader, BufWriter, Write};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use std::{fmt, io};
 use thiserror::Error as ThisError;
-use tokio::fs::{OpenOptions, read_dir, remove_file};
+use tokio::fs::{OpenOptions, read, read_dir, remove_file, write};
 use tokio::task;
 use tokio::time::sleep;
+use tracing::{debug, trace};
 
 const CHUNK_FILE_EXTENSION: &str = "yml";
 const LOCK_ACQUIRE_SLEEP_MILLIS: u64 = 50;
@@ -66,10 +64,10 @@ where
     /// Get an item by hash.
     ///
     /// Returns `None` if the item is not found.
-    pub fn get(&self, hash: Hash<K>) -> Result<Option<T>, TableError> {
+    pub async fn get(&self, hash: Hash<K>) -> Result<Option<T>, TableError> {
         let chunk_path = self.get_chunk_path(get_chunk_hash(hash));
         if chunk_path.exists() {
-            let chunk = read_chunk::<K, C, T>(&chunk_path)?;
+            let chunk = read_chunk::<K, C, T>(&chunk_path).await?;
             let item = chunk.get(&hash).cloned();
             trace!(hash = %hash, found = item.is_some(), "Get item");
             Ok(item)
@@ -105,7 +103,7 @@ where
                 trace!("Skipping non-chunk file: {}", path.display());
                 continue;
             }
-            let chunk = read_chunk::<K, C, T>(&path)?;
+            let chunk = read_chunk::<K, C, T>(&path).await?;
             items.extend(chunk);
         }
         trace!(count = items.len(), "Get all items");
@@ -123,12 +121,12 @@ where
         let chunk_path = self.get_chunk_path(get_chunk_hash(hash));
         let lock = acquire_lock(&chunk_path).await?;
         let mut chunk = if chunk_path.exists() {
-            read_chunk::<K, C, T>(&chunk_path)?
+            read_chunk::<K, C, T>(&chunk_path).await?
         } else {
             BTreeMap::new()
         };
         chunk.insert(hash, item.clone());
-        write_chunk::<K, C, T>(chunk_path, chunk)?;
+        write_chunk::<K, C, T>(chunk_path, chunk).await?;
         release_lock(lock).await?;
         Ok(())
     }
@@ -148,7 +146,12 @@ where
         let item_count = items.len();
         let chunks = group_by_chunk(items);
         let chunk_count = chunks.len();
-        trace!(items = item_count, chunks = chunk_count, replace, "Set many items");
+        trace!(
+            items = item_count,
+            chunks = chunk_count,
+            replace,
+            "Set many items"
+        );
         let futures = chunks.into_iter().map(|(chunk_hash, new_chunk)| {
             let chunk_path = self.get_chunk_path(chunk_hash);
             task::spawn(
@@ -169,13 +172,13 @@ where
         let chunk_path = self.get_chunk_path(get_chunk_hash(hash));
         let lock = acquire_lock(&chunk_path).await?;
         let mut chunk = if chunk_path.exists() {
-            read_chunk::<K, C, T>(&chunk_path)?
+            read_chunk::<K, C, T>(&chunk_path).await?
         } else {
             BTreeMap::new()
         };
         let item = chunk.remove(&hash);
         if item.is_some() {
-            write_chunk::<K, C, T>(chunk_path, chunk)?;
+            write_chunk::<K, C, T>(chunk_path, chunk).await?;
         }
         release_lock(lock).await?;
         trace!(hash = %hash, found = item.is_some(), "Remove item");
@@ -204,29 +207,22 @@ fn group_by_chunk<const K: usize, const C: usize, T>(
 }
 
 /// Read a chunk from a file.
-fn read_chunk<const K: usize, const C: usize, T>(
+async fn read_chunk<const K: usize, const C: usize, T>(
     path: &PathBuf,
 ) -> Result<BTreeMap<Hash<K>, T>, TableError>
 where
     T: DeserializeOwned,
 {
-    if !path.exists() || !path.is_file() {
-        return Err(TableError::new(
-            TableOperation::ReadChunk,
-            Some(path.clone()),
-            io::Error::new(io::ErrorKind::NotFound, "Chunk file does not exist"),
-        ));
-    }
     debug!(path = %path.display(), "Reading chunk");
-    let file = File::open(path)
-        .map_err(|source| TableError::new(TableOperation::OpenChunk, Some(path.clone()), source))?;
-    let reader = BufReader::new(file);
-    serde_yaml::from_reader(reader)
+    let bytes = read(path)
+        .await
+        .map_err(|source| TableError::new(TableOperation::ReadChunk, Some(path.clone()), source))?;
+    serde_yaml::from_slice(&bytes)
         .map_err(|source| TableError::new(TableOperation::Deserialize, Some(path.clone()), source))
 }
 
 /// Write a chunk to a file
-fn write_chunk<const K: usize, const C: usize, T>(
+async fn write_chunk<const K: usize, const C: usize, T>(
     path: PathBuf,
     chunk: BTreeMap<Hash<K>, T>,
 ) -> Result<(), TableError>
@@ -234,15 +230,11 @@ where
     T: Serialize,
 {
     debug!(path = %path.display(), "Writing chunk");
-    let file = File::create(&path).map_err(|source| {
-        TableError::new(TableOperation::CreateChunk, Some(path.clone()), source)
-    })?;
-    let mut writer = BufWriter::new(file);
-    serde_yaml::to_writer(&mut writer, &chunk)
+    let yaml = serde_yaml::to_string(&chunk)
         .map_err(|source| TableError::new(TableOperation::Serialize, Some(path.clone()), source))?;
-    writer
-        .flush()
-        .map_err(|source| TableError::new(TableOperation::FlushChunk, Some(path), source))?;
+    write(&path, yaml)
+        .await
+        .map_err(|source| TableError::new(TableOperation::WriteChunk, Some(path), source))?;
     Ok(())
 }
 
@@ -260,7 +252,7 @@ where
     let mut added = 0;
     let lock = acquire_lock(&chunk_path).await?;
     let mut chunk = if chunk_path.exists() {
-        read_chunk::<K, C, T>(&chunk_path)?
+        read_chunk::<K, C, T>(&chunk_path).await?
     } else {
         BTreeMap::new()
     };
@@ -270,7 +262,7 @@ where
             added += 1;
         }
     }
-    write_chunk::<K, C, T>(chunk_path, chunk)?;
+    write_chunk::<K, C, T>(chunk_path, chunk).await?;
     release_lock(lock).await?;
     Ok(added)
 }
@@ -310,9 +302,9 @@ async fn acquire_lock(path: &Path) -> Result<PathBuf, TableError> {
 }
 
 async fn release_lock(path: PathBuf) -> Result<(), TableError> {
-    remove_file(&path)
-        .await
-        .map_err(|source| TableError::new(TableOperation::ReleaseLock, Some(path.clone()), source))?;
+    remove_file(&path).await.map_err(|source| {
+        TableError::new(TableOperation::ReleaseLock, Some(path.clone()), source)
+    })?;
     trace!(path = %path.display(), "Lock released");
     Ok(())
 }
@@ -320,14 +312,10 @@ async fn release_lock(path: PathBuf) -> Result<(), TableError> {
 /// Operation being performed when a [`TableError`] occurred.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ThisError)]
 pub enum TableOperation {
-    #[error("open chunk")]
-    OpenChunk,
-    #[error("create chunk")]
-    CreateChunk,
     #[error("read chunk")]
     ReadChunk,
-    #[error("flush chunk")]
-    FlushChunk,
+    #[error("write chunk")]
+    WriteChunk,
     #[error("read directory")]
     ReadDir,
     #[error("read entry")]
