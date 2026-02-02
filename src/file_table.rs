@@ -257,10 +257,17 @@ impl Error for FileTableError {
 }
 
 impl Diagnostic for FileTableError {
+    fn code<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
+        Some(Box::new(format!(
+            "{}::FileTable::{:?}",
+            env!("CARGO_PKG_NAME"),
+            self.operation
+        )))
+    }
+
     fn related<'a>(&'a self) -> Option<Box<dyn Iterator<Item = &'a dyn Diagnostic> + 'a>> {
         match &self.source {
             ErrorSource::Batch { errors, .. } => {
-                // The Diagnostic trait requires conversion to trait object
                 #[expect(clippy::as_conversions)]
                 let iter = errors.iter().map(|e| e as &dyn Diagnostic);
                 Some(Box::new(iter))

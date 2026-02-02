@@ -433,6 +433,14 @@ impl Error for TableError {
 }
 
 impl Diagnostic for TableError {
+    fn code<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
+        Some(Box::new(format!(
+            "{}::Table::{:?}",
+            env!("CARGO_PKG_NAME"),
+            self.operation
+        )))
+    }
+
     fn related<'a>(&'a self) -> Option<Box<dyn Iterator<Item = &'a dyn Diagnostic> + 'a>> {
         match &self.source {
             ErrorSource::Batch { errors, .. } => {
