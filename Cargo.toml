@@ -17,15 +17,16 @@ include = [
 
 [dependencies]
 futures = "0.3.31"
-tracing = "0.1.44"
 miette = { version = "7.6.0", features = ["fancy"] }
+rogue_logging = { version = "0.5.0", features = ["miette"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_yaml = "0.9.34"
 thiserror = "2.0.18"
 tokio = { version = "1.49.0", features = ["full"] }
+tracing = "0.1.44"
 
 [dev-dependencies]
-insta = { version = "1.46.2", features = ["yaml"] }
+insta = { version = "1.46.3", features = ["yaml"] }
 sha2 = "0.10.9"
 tracing-test = "0.2.5"
 
@@ -72,7 +73,7 @@ std_instead_of_alloc = "allow"
 std_instead_of_core = "allow"
 str_to_string = "warn"
 string_add = "allow"
-result_large_err = "warn"
+result_large_err = "allow"
 tests_outside_test_module = "allow"
 unneeded_wildcard_pattern = "warn"
 unseparated_literal_suffix = "warn"

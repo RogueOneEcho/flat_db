@@ -1,14 +1,13 @@
 use crate::Hash;
 use futures::future;
-use miette::Diagnostic;
+use rogue_logging::Failure;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
-use std::error::Error;
+use std::io;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use std::{fmt, io};
 use thiserror::Error as ThisError;
 use tokio::fs::{OpenOptions, read, read_dir, remove_file, write};
 use tokio::task;
@@ -37,9 +36,9 @@ pub struct Table<const K: usize, const C: usize, T> {
 impl<const K: usize, const C: usize, T> Table<K, C, T> {
     /// Create a new [`Table`]
     #[must_use]
-    pub fn new(directory: PathBuf) -> Self {
+    pub fn new(directory: impl Into<PathBuf>) -> Self {
         Self {
-            directory,
+            directory: directory.into(),
             phantom: PhantomData,
         }
     }
@@ -64,10 +63,12 @@ where
     /// Get an item by hash.
     ///
     /// Returns `None` if the item is not found.
-    pub async fn get(&self, hash: Hash<K>) -> Result<Option<T>, TableError> {
+    pub async fn get(&self, hash: Hash<K>) -> Result<Option<T>, Failure<TableAction>> {
         let chunk_path = self.get_chunk_path(get_chunk_hash(hash));
         if chunk_path.exists() {
-            let chunk = read_chunk::<K, C, T>(&chunk_path).await?;
+            let chunk = read_chunk::<K, C, T>(&chunk_path)
+                .await
+                .map_err(Failure::wrap(TableAction::Get))?;
             let item = chunk.get(&hash).cloned();
             trace!(hash = %hash, found = item.is_some(), "Get item");
             Ok(item)
@@ -80,19 +81,17 @@ where
     /// Get all items.
     ///
     /// Items are unsorted.
-    pub async fn get_all(&self) -> Result<BTreeMap<Hash<K>, T>, TableError> {
+    pub async fn get_all(&self) -> Result<BTreeMap<Hash<K>, T>, Failure<TableAction>> {
         let mut items = BTreeMap::new();
         let dir_path = self.directory.clone();
         let mut dir = read_dir(&self.directory)
             .await
-            .map_err(|source| TableError::io(TableOperation::ReadDir, Some(dir_path), source))?;
-        while let Some(entry) = dir.next_entry().await.map_err(|source| {
-            TableError::io(
-                TableOperation::ReadEntry,
-                Some(self.directory.clone()),
-                source,
-            )
-        })? {
+            .map_err(Failure::wrap_with_path(TableAction::ReadDir, &dir_path))?;
+        while let Some(entry) = dir
+            .next_entry()
+            .await
+            .map_err(Failure::wrap(TableAction::ReadEntry))?
+        {
             let path = entry.path();
             let extension = path
                 .extension()
@@ -103,7 +102,9 @@ where
                 trace!("Skipping non-chunk file: {}", path.display());
                 continue;
             }
-            let chunk = read_chunk::<K, C, T>(&path).await?;
+            let chunk = read_chunk::<K, C, T>(&path)
+                .await
+                .map_err(Failure::wrap(TableAction::GetAll))?;
             items.extend(chunk);
         }
         trace!(count = items.len(), "Get all items");
@@ -116,18 +117,26 @@ where
     T: Clone + Send + Serialize + DeserializeOwned + 'static,
 {
     /// Add or replace an item.
-    pub async fn set(&self, hash: Hash<K>, item: T) -> Result<(), TableError> {
+    pub async fn set(&self, hash: Hash<K>, item: T) -> Result<(), Failure<TableAction>> {
         trace!(hash = %hash, "Set item");
         let chunk_path = self.get_chunk_path(get_chunk_hash(hash));
-        let lock = acquire_lock(&chunk_path).await?;
+        let lock = acquire_lock(&chunk_path)
+            .await
+            .map_err(Failure::wrap(TableAction::Set))?;
         let mut chunk = if chunk_path.exists() {
-            read_chunk::<K, C, T>(&chunk_path).await?
+            read_chunk::<K, C, T>(&chunk_path)
+                .await
+                .map_err(Failure::wrap(TableAction::Set))?
         } else {
             BTreeMap::new()
         };
         chunk.insert(hash, item.clone());
-        write_chunk::<K, C, T>(chunk_path, chunk).await?;
-        release_lock(lock).await?;
+        write_chunk::<K, C, T>(&chunk_path, chunk)
+            .await
+            .map_err(Failure::wrap(TableAction::Set))?;
+        release_lock(lock)
+            .await
+            .map_err(Failure::wrap(TableAction::Set))?;
         Ok(())
     }
 
@@ -142,7 +151,7 @@ where
         &self,
         items: BTreeMap<Hash<K>, T>,
         replace: bool,
-    ) -> Result<usize, TableError> {
+    ) -> Result<usize, Failure<TableAction>> {
         let item_count = items.len();
         let chunks = group_by_chunk(items);
         let chunk_count = chunks.len();
@@ -165,7 +174,7 @@ where
             match result {
                 Ok(Ok(count)) => added += count,
                 Ok(Err(e)) => errors.push(e),
-                Err(source) => errors.push(TableError::join(source)),
+                Err(source) => errors.push(Failure::new(TableAction::JoinTask, source)),
             }
         }
         if errors.is_empty() {
@@ -175,24 +184,38 @@ where
             let succeeded = chunk_count - errors.len();
             let failed = errors.len();
             trace!(succeeded, failed, "Set many items complete");
-            Err(TableError::batch(succeeded, failed, errors))
+            let mut failure = Failure::from_action(TableAction::SetMany)
+                .with("succeeded", succeeded.to_string())
+                .with("failed", failed.to_string());
+            for error in errors {
+                failure = failure.with_related(error);
+            }
+            Err(failure)
         }
     }
 
     /// Remove an item.
-    pub async fn remove(&self, hash: Hash<K>) -> Result<Option<T>, TableError> {
+    pub async fn remove(&self, hash: Hash<K>) -> Result<Option<T>, Failure<TableAction>> {
         let chunk_path = self.get_chunk_path(get_chunk_hash(hash));
-        let lock = acquire_lock(&chunk_path).await?;
+        let lock = acquire_lock(&chunk_path)
+            .await
+            .map_err(Failure::wrap(TableAction::Remove))?;
         let mut chunk = if chunk_path.exists() {
-            read_chunk::<K, C, T>(&chunk_path).await?
+            read_chunk::<K, C, T>(&chunk_path)
+                .await
+                .map_err(Failure::wrap(TableAction::Remove))?
         } else {
             BTreeMap::new()
         };
         let item = chunk.remove(&hash);
         if item.is_some() {
-            write_chunk::<K, C, T>(chunk_path, chunk).await?;
+            write_chunk::<K, C, T>(&chunk_path, chunk)
+                .await
+                .map_err(Failure::wrap(TableAction::Remove))?;
         }
-        release_lock(lock).await?;
+        release_lock(lock)
+            .await
+            .map_err(Failure::wrap(TableAction::Remove))?;
         trace!(hash = %hash, found = item.is_some(), "Remove item");
         Ok(item)
     }
@@ -220,34 +243,34 @@ fn group_by_chunk<const K: usize, const C: usize, T>(
 
 /// Read a chunk from a file.
 async fn read_chunk<const K: usize, const C: usize, T>(
-    path: &PathBuf,
-) -> Result<BTreeMap<Hash<K>, T>, TableError>
+    path: impl AsRef<Path>,
+) -> Result<BTreeMap<Hash<K>, T>, Failure<TableAction>>
 where
     T: DeserializeOwned,
 {
+    let path = path.as_ref();
     debug!(path = %path.display(), "Reading chunk");
     let bytes = read(path)
         .await
-        .map_err(|source| TableError::io(TableOperation::ReadChunk, Some(path.clone()), source))?;
-    serde_yaml::from_slice(&bytes)
-        .map_err(|source| TableError::yaml(TableOperation::Deserialize, Some(path.clone()), source))
+        .map_err(Failure::wrap_with_path(TableAction::ReadChunk, path))?;
+    serde_yaml::from_slice(&bytes).map_err(Failure::wrap_with_path(TableAction::Deserialize, path))
 }
 
 /// Write a chunk to a file
 async fn write_chunk<const K: usize, const C: usize, T>(
-    path: PathBuf,
+    path: impl AsRef<Path>,
     chunk: BTreeMap<Hash<K>, T>,
-) -> Result<(), TableError>
+) -> Result<(), Failure<TableAction>>
 where
     T: Serialize,
 {
+    let path = path.as_ref();
     debug!(path = %path.display(), "Writing chunk");
-    let yaml = serde_yaml::to_string(&chunk).map_err(|source| {
-        TableError::yaml(TableOperation::Serialize, Some(path.clone()), source)
-    })?;
-    write(&path, yaml)
+    let yaml = serde_yaml::to_string(&chunk)
+        .map_err(Failure::wrap_with_path(TableAction::Serialize, path))?;
+    write(path, yaml)
         .await
-        .map_err(|source| TableError::io(TableOperation::WriteChunk, Some(path), source))?;
+        .map_err(Failure::wrap_with_path(TableAction::WriteChunk, path))?;
     Ok(())
 }
 
@@ -255,17 +278,22 @@ where
 ///
 /// If `replace` is true then existing items are replaced
 async fn update_chunk<const K: usize, const C: usize, T>(
-    chunk_path: PathBuf,
+    chunk_path: impl AsRef<Path>,
     new_chunk: BTreeMap<Hash<K>, T>,
     replace: bool,
-) -> Result<usize, TableError>
+) -> Result<usize, Failure<TableAction>>
 where
     T: DeserializeOwned + Serialize,
 {
+    let chunk_path = chunk_path.as_ref();
     let mut added = 0;
-    let lock = acquire_lock(&chunk_path).await?;
+    let lock = acquire_lock(chunk_path)
+        .await
+        .map_err(Failure::wrap(TableAction::UpdateChunk))?;
     let mut chunk = if chunk_path.exists() {
-        read_chunk::<K, C, T>(&chunk_path).await?
+        read_chunk::<K, C, T>(chunk_path)
+            .await
+            .map_err(Failure::wrap(TableAction::UpdateChunk))?
     } else {
         BTreeMap::new()
     };
@@ -275,18 +303,22 @@ where
             added += 1;
         }
     }
-    write_chunk::<K, C, T>(chunk_path, chunk).await?;
-    release_lock(lock).await?;
+    write_chunk::<K, C, T>(chunk_path, chunk)
+        .await
+        .map_err(Failure::wrap(TableAction::UpdateChunk))?;
+    release_lock(lock)
+        .await
+        .map_err(Failure::wrap(TableAction::UpdateChunk))?;
     Ok(added)
 }
 
 /// Acquire a lock
 ///
 /// If the lock is already in use then wait
-async fn acquire_lock(path: &Path) -> Result<PathBuf, TableError> {
+async fn acquire_lock(path: impl AsRef<Path>) -> Result<PathBuf, Failure<TableAction>> {
     let start = Instant::now();
     let timeout = Duration::from_secs(LOCK_ACQUIRE_TIMEOUT);
-    let mut lock: PathBuf = path.to_path_buf();
+    let mut lock: PathBuf = path.as_ref().to_path_buf();
     lock.set_extension(LOCK_FILE_EXTENSION);
     loop {
         if OpenOptions::new()
@@ -300,31 +332,42 @@ async fn acquire_lock(path: &Path) -> Result<PathBuf, TableError> {
             return Ok(lock);
         }
         if start.elapsed() > timeout {
-            return Err(TableError::io(
-                TableOperation::AcquireLock,
-                Some(lock),
+            return Err(Failure::new(
+                TableAction::AcquireLock,
                 io::Error::new(
                     io::ErrorKind::TimedOut,
                     "Exceeded timeout for acquiring lock",
                 ),
-            ));
+            )
+            .with_path(&lock));
         }
         trace!(path = %lock.display(), "Lock busy, waiting");
         sleep(Duration::from_millis(LOCK_ACQUIRE_SLEEP_MILLIS)).await;
     }
 }
 
-async fn release_lock(path: PathBuf) -> Result<(), TableError> {
-    remove_file(&path).await.map_err(|source| {
-        TableError::io(TableOperation::ReleaseLock, Some(path.clone()), source)
-    })?;
+async fn release_lock(path: impl AsRef<Path>) -> Result<(), Failure<TableAction>> {
+    let path = path.as_ref();
+    remove_file(path)
+        .await
+        .map_err(Failure::wrap_with_path(TableAction::ReleaseLock, path))?;
     trace!(path = %path.display(), "Lock released");
     Ok(())
 }
 
-/// Operation being performed when a [`TableError`] occurred.
+/// Action being performed when a [`Failure<TableAction>`] occurred.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ThisError)]
-pub enum TableOperation {
+pub enum TableAction {
+    #[error("get item")]
+    Get,
+    #[error("get all items")]
+    GetAll,
+    #[error("set item")]
+    Set,
+    #[error("remove item")]
+    Remove,
+    #[error("update chunk")]
+    UpdateChunk,
     #[error("read chunk")]
     ReadChunk,
     #[error("write chunk")]
@@ -339,116 +382,10 @@ pub enum TableOperation {
     ReleaseLock,
     #[error("serialize")]
     Serialize,
-    #[error("deserialize")]
+    #[error("deserialize chunk")]
     Deserialize,
     #[error("update multiple chunks")]
     JoinTask,
     #[error("set items")]
     SetMany,
-}
-
-/// Errors returned by [`Table`] operations.
-#[derive(Debug)]
-pub struct TableError {
-    pub operation: TableOperation,
-    pub path: Option<PathBuf>,
-    source: ErrorSource,
-}
-
-#[derive(Debug)]
-enum ErrorSource {
-    Io(io::Error),
-    Yaml(serde_yaml::Error),
-    Join(task::JoinError),
-    Batch {
-        succeeded: usize,
-        failed: usize,
-        errors: Vec<TableError>,
-    },
-}
-
-impl TableError {
-    fn io(operation: TableOperation, path: Option<PathBuf>, source: io::Error) -> Self {
-        Self {
-            operation,
-            path,
-            source: ErrorSource::Io(source),
-        }
-    }
-
-    fn yaml(operation: TableOperation, path: Option<PathBuf>, source: serde_yaml::Error) -> Self {
-        Self {
-            operation,
-            path,
-            source: ErrorSource::Yaml(source),
-        }
-    }
-
-    fn join(source: task::JoinError) -> Self {
-        Self {
-            operation: TableOperation::JoinTask,
-            path: None,
-            source: ErrorSource::Join(source),
-        }
-    }
-
-    fn batch(succeeded: usize, failed: usize, errors: Vec<TableError>) -> Self {
-        Self {
-            operation: TableOperation::SetMany,
-            path: None,
-            source: ErrorSource::Batch {
-                succeeded,
-                failed,
-                errors,
-            },
-        }
-    }
-}
-
-impl fmt::Display for TableError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Failed to {}", self.operation)?;
-        if let Some(path) = &self.path {
-            write!(f, "\nPath: {}", path.display())?;
-        }
-        if let ErrorSource::Batch {
-            succeeded, failed, ..
-        } = &self.source
-        {
-            write!(f, "\n{succeeded} succeeded, {failed} failed")?;
-        }
-        Ok(())
-    }
-}
-
-impl Error for TableError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match &self.source {
-            ErrorSource::Io(e) => Some(e),
-            ErrorSource::Yaml(e) => Some(e),
-            ErrorSource::Join(e) => Some(e),
-            ErrorSource::Batch { .. } => None,
-        }
-    }
-}
-
-impl Diagnostic for TableError {
-    fn code<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
-        Some(Box::new(format!(
-            "{}::Table::{:?}",
-            env!("CARGO_PKG_NAME"),
-            self.operation
-        )))
-    }
-
-    fn related<'a>(&'a self) -> Option<Box<dyn Iterator<Item = &'a dyn Diagnostic> + 'a>> {
-        match &self.source {
-            ErrorSource::Batch { errors, .. } => {
-                #[expect(clippy::as_conversions)]
-                let iter = errors.iter().map(|e| e as &dyn Diagnostic);
-                Some(Box::new(iter))
-            }
-            ErrorSource::Io(_) | ErrorSource::Yaml(_) | ErrorSource::Join(_) => None,
-        }
-    }
 }

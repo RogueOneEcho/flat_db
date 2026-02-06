@@ -1,7 +1,8 @@
 use crate::tests::example_item::{ExampleItem, example_items};
 use crate::tests::snapshots::TableSnapshot;
 use crate::tests::test_directory::TestDirectory;
-use crate::{Hash, Table, TableError};
+use crate::{Hash, Table, TableAction};
+use rogue_logging::Failure;
 use std::collections::BTreeMap;
 use std::fs::create_dir_all;
 use std::marker::PhantomData;
@@ -10,7 +11,7 @@ use tracing_test::traced_test;
 
 #[traced_test]
 #[tokio::test]
-async fn table_set_many_and_get_all() -> Result<(), TableError> {
+async fn table_set_many_and_get_all() -> Result<(), Failure<TableAction>> {
     // Arrange
     let (_test_dir, table) = create_table();
     let items = example_items();
@@ -27,7 +28,7 @@ async fn table_set_many_and_get_all() -> Result<(), TableError> {
 
 #[traced_test]
 #[tokio::test]
-async fn table_set_and_remove() -> Result<(), TableError> {
+async fn table_set_and_remove() -> Result<(), Failure<TableAction>> {
     // Arrange
     let (_test_dir, table) = create_table();
     let items = example_items();
@@ -55,7 +56,7 @@ async fn table_set_and_remove() -> Result<(), TableError> {
 
 #[traced_test]
 #[tokio::test]
-async fn table_get_single_item() -> Result<(), TableError> {
+async fn table_get_single_item() -> Result<(), Failure<TableAction>> {
     // Arrange
     let (_test_dir, table) = create_table();
     let items = example_items();
@@ -72,7 +73,7 @@ async fn table_get_single_item() -> Result<(), TableError> {
 
 #[traced_test]
 #[tokio::test]
-async fn table_get_missing_item() -> Result<(), TableError> {
+async fn table_get_missing_item() -> Result<(), Failure<TableAction>> {
     // Arrange
     let (_test_dir, table) = create_table();
     let items = example_items();
@@ -89,7 +90,7 @@ async fn table_get_missing_item() -> Result<(), TableError> {
 
 #[traced_test]
 #[tokio::test]
-async fn table_set_many_no_replace() -> Result<(), TableError> {
+async fn table_set_many_no_replace() -> Result<(), Failure<TableAction>> {
     // Arrange
     let (_test_dir, table) = create_table();
     let items = example_items();
@@ -131,7 +132,7 @@ fn table_empty_get_all() {
 
 #[traced_test]
 #[tokio::test]
-async fn table_remove_missing_item() -> Result<(), TableError> {
+async fn table_remove_missing_item() -> Result<(), Failure<TableAction>> {
     // Arrange
     let (_test_dir, table) = create_table();
     let items = example_items();

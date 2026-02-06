@@ -1,10 +1,8 @@
 use crate::Hash;
 use futures::future::join_all;
-use miette::Diagnostic;
+use rogue_logging::Failure;
 use std::collections::BTreeMap;
-use std::error::Error;
-use std::path::PathBuf;
-use std::{fmt, io};
+use std::path::{Path, PathBuf};
 use thiserror::Error as ThisError;
 use tokio::fs::{copy, create_dir_all, read_dir};
 use tracing::{debug, trace};
@@ -24,10 +22,10 @@ pub struct FileTable<const K: usize, const C: usize> {
 impl<const K: usize, const C: usize> FileTable<K, C> {
     /// Create a new [`FileTable`].
     #[must_use]
-    pub fn new(directory: PathBuf, extension: String) -> Self {
+    pub fn new(directory: impl Into<PathBuf>, extension: impl Into<String>) -> Self {
         Self {
-            directory,
-            extension,
+            directory: directory.into(),
+            extension: extension.into(),
         }
     }
 
@@ -55,35 +53,32 @@ impl<const K: usize, const C: usize> FileTable<K, C> {
     /// Get all file paths.
     ///
     /// Items are unsorted.
-    pub async fn get_all(&self) -> Result<BTreeMap<Hash<K>, PathBuf>, FileTableError> {
+    pub async fn get_all(&self) -> Result<BTreeMap<Hash<K>, PathBuf>, Failure<FileTableAction>> {
         let mut paths = BTreeMap::new();
         let dir_path = self.directory.clone();
-        let mut parent_dir = read_dir(&self.directory).await.map_err(|source| {
-            FileTableError::new(FileTableOperation::ReadDir, Some(dir_path), source)
-        })?;
-        while let Some(entry) = parent_dir.next_entry().await.map_err(|source| {
-            FileTableError::new(
-                FileTableOperation::ReadEntry,
-                Some(self.directory.clone()),
-                source,
-            )
-        })? {
+        let mut parent_dir = read_dir(&self.directory)
+            .await
+            .map_err(Failure::wrap_with_path(FileTableAction::ReadDir, &dir_path))?;
+        while let Some(entry) = parent_dir
+            .next_entry()
+            .await
+            .map_err(Failure::wrap(FileTableAction::ReadEntry))?
+        {
             let path = entry.path();
             if !path.is_dir() {
                 trace!("Skipping non-chunk directory: {}", path.display());
                 continue;
             }
             let chunk_path = path.clone();
-            let mut chunk_dir = read_dir(&path).await.map_err(|source| {
-                FileTableError::new(FileTableOperation::ReadChunkDir, Some(chunk_path), source)
-            })?;
-            while let Some(entry) = chunk_dir.next_entry().await.map_err(|source| {
-                FileTableError::new(
-                    FileTableOperation::ReadChunkEntry,
-                    Some(path.clone()),
-                    source,
-                )
-            })? {
+            let mut chunk_dir = read_dir(&path).await.map_err(Failure::wrap_with_path(
+                FileTableAction::ReadChunkDir,
+                &chunk_path,
+            ))?;
+            while let Some(entry) = chunk_dir
+                .next_entry()
+                .await
+                .map_err(Failure::wrap(FileTableAction::ReadChunkEntry))?
+            {
                 let path = entry.path();
                 let extension = path
                     .extension()
@@ -112,32 +107,44 @@ impl<const K: usize, const C: usize> FileTable<K, C> {
 
 impl<const K: usize, const C: usize> FileTable<K, C> {
     /// Copy a file into storage.
-    pub async fn set(&self, hash: Hash<K>, path: PathBuf) -> Result<(), FileTableError> {
+    pub async fn set(
+        &self,
+        hash: Hash<K>,
+        path: impl AsRef<Path>,
+    ) -> Result<(), Failure<FileTableAction>> {
+        let path = path.as_ref();
         let stored_path = self.get_path(hash);
         let stored_dir = stored_path
             .parent()
             .expect("stored path should have a parent");
         if !stored_dir.exists() {
             trace!(path = %stored_dir.display(), "Creating chunk directory");
-            create_dir_all(stored_dir).await.map_err(|source| {
-                FileTableError::new(
-                    FileTableOperation::CreateDir,
-                    Some(stored_dir.to_path_buf()),
-                    source,
-                )
-            })?;
+            create_dir_all(stored_dir)
+                .await
+                .map_err(Failure::wrap_with_path(
+                    FileTableAction::CreateDir,
+                    stored_dir,
+                ))
+                .map_err(Failure::wrap(FileTableAction::Set))?;
         }
         debug!(hash = %hash, from = %path.display(), to = %stored_path.display(), "Copying file");
-        copy(&path, &stored_path).await.map_err(|source| {
-            FileTableError::new(FileTableOperation::CopyFile, Some(path), source)
-        })?;
+        copy(path, &stored_path)
+            .await
+            .map_err(Failure::wrap_with_path(
+                FileTableAction::CopyFile,
+                &stored_path,
+            ))
+            .map_err(Failure::wrap(FileTableAction::Set))?;
         Ok(())
     }
 
     /// Copy multiple files into storage.
     ///
     /// Existing files are replaced.
-    pub async fn set_many(&self, items: BTreeMap<Hash<K>, PathBuf>) -> Result<(), FileTableError> {
+    pub async fn set_many(
+        &self,
+        items: BTreeMap<Hash<K>, PathBuf>,
+    ) -> Result<(), Failure<FileTableAction>> {
         let count = items.len();
         trace!(count, "Set many files");
         let tasks: Vec<_> = items
@@ -157,12 +164,13 @@ impl<const K: usize, const C: usize> FileTable<K, C> {
                 failed = error_count,
                 "Set many files complete"
             );
-            let inner_errors: Vec<_> = errors.into_iter().filter_map(Result::err).collect();
-            Err(FileTableError::new_batch(
-                ok_count,
-                error_count,
-                inner_errors,
-            ))
+            let mut failure = Failure::from_action(FileTableAction::SetMany)
+                .with("succeeded", ok_count.to_string())
+                .with("failed", error_count.to_string());
+            for error in errors.into_iter().filter_map(Result::err) {
+                failure = failure.with_related(error);
+            }
+            Err(failure)
         }
     }
 }
@@ -172,9 +180,11 @@ fn get_chunk_hash<const K: usize, const C: usize>(hash: Hash<K>) -> Hash<C> {
     hash.truncate::<C>().expect("should be able to truncate")
 }
 
-/// Operation being performed when a [`FileTableError`] occurred.
+/// Action being performed when a [`Failure<FileTableAction>`] occurred.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ThisError)]
-pub enum FileTableOperation {
+pub enum FileTableAction {
+    #[error("set file")]
+    Set,
     #[error("read directory")]
     ReadDir,
     #[error("read entry")]
@@ -189,90 +199,4 @@ pub enum FileTableOperation {
     CopyFile,
     #[error("set files")]
     SetMany,
-}
-
-/// Errors returned by [`FileTable`] operations.
-#[derive(Debug)]
-pub struct FileTableError {
-    pub operation: FileTableOperation,
-    pub path: Option<PathBuf>,
-    source: ErrorSource,
-}
-
-#[derive(Debug)]
-enum ErrorSource {
-    Io(io::Error),
-    Batch {
-        succeeded: usize,
-        failed: usize,
-        errors: Vec<FileTableError>,
-    },
-}
-
-impl FileTableError {
-    fn new(operation: FileTableOperation, path: Option<PathBuf>, source: io::Error) -> Self {
-        Self {
-            operation,
-            path,
-            source: ErrorSource::Io(source),
-        }
-    }
-
-    fn new_batch(succeeded: usize, failed: usize, errors: Vec<FileTableError>) -> Self {
-        Self {
-            operation: FileTableOperation::SetMany,
-            path: None,
-            source: ErrorSource::Batch {
-                succeeded,
-                failed,
-                errors,
-            },
-        }
-    }
-}
-
-impl fmt::Display for FileTableError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Failed to {}", self.operation)?;
-        if let Some(path) = &self.path {
-            write!(f, "\nPath: {}", path.display())?;
-        }
-        if let ErrorSource::Batch {
-            succeeded, failed, ..
-        } = &self.source
-        {
-            write!(f, "\n{succeeded} succeeded, {failed} failed")?;
-        }
-        Ok(())
-    }
-}
-
-impl Error for FileTableError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match &self.source {
-            ErrorSource::Io(e) => Some(e),
-            ErrorSource::Batch { .. } => None,
-        }
-    }
-}
-
-impl Diagnostic for FileTableError {
-    fn code<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
-        Some(Box::new(format!(
-            "{}::FileTable::{:?}",
-            env!("CARGO_PKG_NAME"),
-            self.operation
-        )))
-    }
-
-    fn related<'a>(&'a self) -> Option<Box<dyn Iterator<Item = &'a dyn Diagnostic> + 'a>> {
-        match &self.source {
-            ErrorSource::Batch { errors, .. } => {
-                #[expect(clippy::as_conversions)]
-                let iter = errors.iter().map(|e| e as &dyn Diagnostic);
-                Some(Box::new(iter))
-            }
-            ErrorSource::Io(_) => None,
-        }
-    }
 }

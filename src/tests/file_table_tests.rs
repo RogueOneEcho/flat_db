@@ -2,7 +2,8 @@ use crate::tests::example_item::{ExampleItem, example_items};
 use crate::tests::helpers::{PKG_NAME, get_temp_dir};
 use crate::tests::snapshots::DirectorySnapshot;
 use crate::tests::test_directory::TestDirectory;
-use crate::{FileTable, FileTableError, Hash};
+use crate::{FileTable, FileTableAction, Hash};
+use rogue_logging::Failure;
 use std::collections::BTreeMap;
 use std::fs::{create_dir_all, write};
 use std::path::PathBuf;
@@ -11,7 +12,7 @@ use tracing_test::traced_test;
 
 #[traced_test]
 #[tokio::test]
-async fn file_table_set_many_and_get_all() -> Result<(), FileTableError> {
+async fn file_table_set_many_and_get_all() -> Result<(), Failure<FileTableAction>> {
     // Arrange
     let examples = create_example_files();
     let expected_count = examples.len();
@@ -30,7 +31,7 @@ async fn file_table_set_many_and_get_all() -> Result<(), FileTableError> {
 
 #[traced_test]
 #[tokio::test]
-async fn file_table_set_and_get_all() -> Result<(), FileTableError> {
+async fn file_table_set_and_get_all() -> Result<(), Failure<FileTableAction>> {
     // Arrange
     let examples = create_example_files();
     let expected_count = examples.len();
@@ -59,7 +60,7 @@ async fn file_table_set_and_get_all() -> Result<(), FileTableError> {
 
 #[traced_test]
 #[tokio::test]
-async fn file_table_get_single_file() -> Result<(), FileTableError> {
+async fn file_table_get_single_file() -> Result<(), Failure<FileTableAction>> {
     // Arrange
     let examples = create_example_files();
     let hash = *examples.keys().next().expect("should have at least one");
@@ -78,7 +79,7 @@ async fn file_table_get_single_file() -> Result<(), FileTableError> {
 
 #[traced_test]
 #[tokio::test]
-async fn file_table_get_missing_file() -> Result<(), FileTableError> {
+async fn file_table_get_missing_file() -> Result<(), Failure<FileTableAction>> {
     // Arrange
     let examples = create_example_files();
     let (_test_dir, table) = create_file_table();
