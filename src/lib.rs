@@ -10,6 +10,7 @@ pub use table::*;
 
 mod file_table;
 mod hash;
+mod lock_guard;
 mod table;
 #[cfg(test)]
 mod tests;

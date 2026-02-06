@@ -1,23 +1,18 @@
 use crate::Hash;
+use crate::lock_guard::acquire_lock;
 use futures::future;
 use rogue_logging::Failure;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
-use std::io;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 use thiserror::Error as ThisError;
-use tokio::fs::{OpenOptions, read, read_dir, remove_file, write};
+use tokio::fs::{read, read_dir, write};
 use tokio::task;
-use tokio::time::sleep;
 use tracing::{debug, trace};
 
 const CHUNK_FILE_EXTENSION: &str = "yml";
-const LOCK_ACQUIRE_SLEEP_MILLIS: u64 = 50;
-const LOCK_ACQUIRE_TIMEOUT: u64 = 2;
-const LOCK_FILE_EXTENSION: &str = "lock";
 
 /// Key-value table with chunked file storage.
 ///
@@ -120,7 +115,7 @@ where
     pub async fn set(&self, hash: Hash<K>, item: T) -> Result<(), Failure<TableAction>> {
         trace!(hash = %hash, "Set item");
         let chunk_path = self.get_chunk_path(get_chunk_hash(hash));
-        let lock = acquire_lock(&chunk_path)
+        let _lock = acquire_lock(&chunk_path)
             .await
             .map_err(Failure::wrap(TableAction::Set))?;
         let mut chunk = if chunk_path.exists() {
@@ -132,9 +127,6 @@ where
         };
         chunk.insert(hash, item.clone());
         write_chunk::<K, C, T>(&chunk_path, chunk)
-            .await
-            .map_err(Failure::wrap(TableAction::Set))?;
-        release_lock(lock)
             .await
             .map_err(Failure::wrap(TableAction::Set))?;
         Ok(())
@@ -197,7 +189,7 @@ where
     /// Remove an item.
     pub async fn remove(&self, hash: Hash<K>) -> Result<Option<T>, Failure<TableAction>> {
         let chunk_path = self.get_chunk_path(get_chunk_hash(hash));
-        let lock = acquire_lock(&chunk_path)
+        let _lock = acquire_lock(&chunk_path)
             .await
             .map_err(Failure::wrap(TableAction::Remove))?;
         let mut chunk = if chunk_path.exists() {
@@ -213,9 +205,6 @@ where
                 .await
                 .map_err(Failure::wrap(TableAction::Remove))?;
         }
-        release_lock(lock)
-            .await
-            .map_err(Failure::wrap(TableAction::Remove))?;
         trace!(hash = %hash, found = item.is_some(), "Remove item");
         Ok(item)
     }
@@ -287,7 +276,7 @@ where
 {
     let chunk_path = chunk_path.as_ref();
     let mut added = 0;
-    let lock = acquire_lock(chunk_path)
+    let _lock = acquire_lock(chunk_path)
         .await
         .map_err(Failure::wrap(TableAction::UpdateChunk))?;
     let mut chunk = if chunk_path.exists() {
@@ -306,53 +295,7 @@ where
     write_chunk::<K, C, T>(chunk_path, chunk)
         .await
         .map_err(Failure::wrap(TableAction::UpdateChunk))?;
-    release_lock(lock)
-        .await
-        .map_err(Failure::wrap(TableAction::UpdateChunk))?;
     Ok(added)
-}
-
-/// Acquire a lock
-///
-/// If the lock is already in use then wait
-async fn acquire_lock(path: impl AsRef<Path>) -> Result<PathBuf, Failure<TableAction>> {
-    let start = Instant::now();
-    let timeout = Duration::from_secs(LOCK_ACQUIRE_TIMEOUT);
-    let mut lock: PathBuf = path.as_ref().to_path_buf();
-    lock.set_extension(LOCK_FILE_EXTENSION);
-    loop {
-        if OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock)
-            .await
-            .is_ok()
-        {
-            trace!(path = %lock.display(), "Lock acquired");
-            return Ok(lock);
-        }
-        if start.elapsed() > timeout {
-            return Err(Failure::new(
-                TableAction::AcquireLock,
-                io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "Exceeded timeout for acquiring lock",
-                ),
-            )
-            .with_path(&lock));
-        }
-        trace!(path = %lock.display(), "Lock busy, waiting");
-        sleep(Duration::from_millis(LOCK_ACQUIRE_SLEEP_MILLIS)).await;
-    }
-}
-
-async fn release_lock(path: impl AsRef<Path>) -> Result<(), Failure<TableAction>> {
-    let path = path.as_ref();
-    remove_file(path)
-        .await
-        .map_err(Failure::wrap_with_path(TableAction::ReleaseLock, path))?;
-    trace!(path = %path.display(), "Lock released");
-    Ok(())
 }
 
 /// Action being performed when a [`Failure<TableAction>`] occurred.
@@ -378,8 +321,6 @@ pub enum TableAction {
     ReadEntry,
     #[error("acquire lock")]
     AcquireLock,
-    #[error("release lock")]
-    ReleaseLock,
     #[error("serialize")]
     Serialize,
     #[error("deserialize chunk")]
