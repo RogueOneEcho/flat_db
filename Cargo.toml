@@ -16,9 +16,9 @@ include = [
 ]
 
 [dependencies]
-futures = "0.3.31"
+futures = "0.3.32"
 miette = { version = "7.6.0", features = ["fancy"] }
-rogue_logging = { version = "0.5.0", features = ["miette"] }
+rogue_logging = { version = "0.7.1", features = ["miette"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_yaml = "0.9.34"
 thiserror = "2.0.18"
@@ -28,7 +28,7 @@ tracing = "0.1.44"
 [dev-dependencies]
 insta = { version = "1.46.3", features = ["yaml"] }
 sha2 = "0.10.9"
-tracing-test = "0.2.5"
+tracing-test = "0.2.6"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

@@ -2,6 +2,8 @@ use crate::TableAction;
 use crate::lock_guard::acquire_lock;
 use crate::tests::test_directory::TestDirectory;
 use rogue_logging::Failure;
+use std::time::Duration;
+use tokio::time::sleep;
 use tracing_test::traced_test;
 
 #[traced_test]
@@ -58,7 +60,7 @@ async fn acquire_succeeds_after_concurrent_release() -> Result<(), Failure<Table
     let guard = acquire_lock(&chunk_path).await?;
     let path = chunk_path.clone();
     let handle = tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(100)).await;
         drop(guard);
     });
     let _guard2 = acquire_lock(&path).await?;
