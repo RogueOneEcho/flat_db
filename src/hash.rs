@@ -11,7 +11,7 @@ const HEXADECIMAL_RADIX: u32 = 16;
 /// Fixed-size byte array hash.
 ///
 /// Serializes to and from hexadecimal strings.
-#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Hash<const N: usize> {
     bytes: [u8; N],
 }
