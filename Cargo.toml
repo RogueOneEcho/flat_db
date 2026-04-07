@@ -18,16 +18,17 @@ include = [
 [dependencies]
 futures = "0.3.32"
 miette = { version = "7.6.0", features = ["fancy"] }
-rogue_logging = { version = "0.7.1", features = ["miette"] }
+rogue_logging = { version = "0.7.2", features = ["miette"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_yaml = "0.9.34"
 thiserror = "2.0.18"
-tokio = { version = "1.49.0", features = ["full"] }
+tokio = { version = "1.51.0", features = ["full"] }
 tracing = "0.1.44"
 
 [dev-dependencies]
-insta = { version = "1.46.3", features = ["yaml"] }
-sha2 = "0.10.9"
+insta = { version = "1.47.2", features = ["yaml"] }
+# Pinned to 0.10: 0.11 output type drops LowerHex and the replacement crate (base16ct) adds friction
+sha2 = "=0.10.9"
 tracing-test = "0.2.6"
 
 [lints.clippy]
